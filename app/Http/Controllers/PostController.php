@@ -4,10 +4,14 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\StorePostRequest;
 use App\Http\Requests\UpdatePostRequest;
+use App\Jobs\ProcessPostImageJob;
 use App\Models\Post;
+use App\Services\MediaUploadService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 
 class PostController extends Controller
 {
@@ -58,21 +62,28 @@ class PostController extends Controller
     public function store(StorePostRequest $request): JsonResponse
     {
         try {
+            // Create post without image first
             $post = Post::create([
                 'user_id' => $request->user()->id,
                 'title' => $request->title,
                 'content' => $request->content,
-                'image_url' => null, // Will be handled in Phase 3 with Cloudinary
+                'image_url' => null,
             ]);
+
+            // Handle image upload asynchronously if provided
+            if ($request->hasFile('image')) {
+                $this->handleImageUpload($request->file('image'), $post);
+            }
 
             // Load user relationship
             $post->load('user:id,name,email');
 
             return response()->json([
                 'success' => true,
-                'message' => 'Post created successfully',
+                'message' => 'Post created successfully' . ($request->hasFile('image') ? '. Image is being processed.' : ''),
                 'data' => [
                     'post' => $post,
+                    'image_processing' => $request->hasFile('image'),
                 ],
             ], 201);
         } catch (\Exception $e) {
@@ -81,6 +92,34 @@ class PostController extends Controller
                 'message' => 'Failed to create post',
                 'error' => config('app.debug') ? $e->getMessage() : 'An error occurred',
             ], 500);
+        }
+    }
+
+    /**
+     * Handle image upload asynchronously.
+     *
+     * @param \Illuminate\Http\UploadedFile $image
+     * @param Post $post
+     * @return void
+     */
+    protected function handleImageUpload($image, Post $post): void
+    {
+        try {
+            // Store file temporarily
+            $tempPath = $image->store('temp/post-images');
+
+            // Dispatch job for async processing
+            \App\Jobs\ProcessPostImageJob::dispatch($post, $tempPath);
+
+            \Illuminate\Support\Facades\Log::info('Image upload job dispatched', [
+                'post_id' => $post->id,
+                'temp_path' => $tempPath,
+            ]);
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Failed to dispatch image upload job', [
+                'post_id' => $post->id,
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 
@@ -123,14 +162,32 @@ class PostController extends Controller
             // Authorization check
             Gate::authorize('update', $post);
 
+            // Update text fields
             $post->update($request->only(['title', 'content']));
+
+            // Handle new image upload if provided
+            if ($request->hasFile('image')) {
+                // Delete old image from Cloudinary if exists
+                if ($post->image_url) {
+                    $mediaService = app(MediaUploadService::class);
+                    $publicId = $mediaService->extractPublicId($post->image_url);
+                    if ($publicId) {
+                        $mediaService->deleteImage($publicId);
+                    }
+                }
+
+                // Upload new image asynchronously
+                $this->handleImageUpload($request->file('image'), $post);
+            }
+
             $post->load('user:id,name,email');
 
             return response()->json([
                 'success' => true,
-                'message' => 'Post updated successfully',
+                'message' => 'Post updated successfully' . ($request->hasFile('image') ? '. New image is being processed.' : ''),
                 'data' => [
                     'post' => $post,
+                    'image_processing' => $request->hasFile('image'),
                 ],
             ], 200);
         } catch (\Illuminate\Auth\Access\AuthorizationException $e) {
@@ -159,6 +216,15 @@ class PostController extends Controller
         try {
             // Authorization check
             Gate::authorize('delete', $post);
+
+            // Delete image from Cloudinary if exists
+            if ($post->image_url) {
+                $mediaService = app(MediaUploadService::class);
+                $publicId = $mediaService->extractPublicId($post->image_url);
+                if ($publicId) {
+                    $mediaService->deleteImage($publicId);
+                }
+            }
 
             $post->delete();
 
