@@ -1,7 +1,10 @@
 <?php
 
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\CommentController;
+use App\Http\Controllers\FeedController;
 use App\Http\Controllers\FollowController;
+use App\Http\Controllers\LikeController;
 use App\Http\Controllers\PostController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -31,6 +34,13 @@ Route::prefix('v1')->group(function () {
     Route::get('/users/{user}/profile', [FollowController::class, 'userProfile'])->name('api.users.profile');
     Route::get('/users/{user}/followers', [FollowController::class, 'followers'])->name('api.users.followers');
     Route::get('/users/{user}/following', [FollowController::class, 'following'])->name('api.users.following');
+
+    // Public likes and comments (anyone can view)
+    Route::get('/posts/{post}/likes', [LikeController::class, 'likedBy'])->name('api.posts.likes');
+    Route::get('/posts/{post}/comments', [CommentController::class, 'index'])->name('api.posts.comments');
+
+    // Public feed (trending/popular posts)
+    Route::get('/feed/public', [FeedController::class, 'publicFeed'])->name('api.feed.public');
 });
 
 // Protected routes (requires authentication)
@@ -47,9 +57,24 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     Route::get('/my-posts', [PostController::class, 'myPosts'])->name('api.posts.my');
 
     // Follow system routes
-    Route::post('/users/{user}/follow', [\App\Http\Controllers\FollowController::class, 'follow'])->name('api.users.follow');
-    Route::delete('/users/{user}/unfollow', [\App\Http\Controllers\FollowController::class, 'unfollow'])->name('api.users.unfollow');
-    Route::get('/follow/stats', [\App\Http\Controllers\FollowController::class, 'stats'])->name('api.follow.stats');
+    Route::post('/users/{user}/follow', [FollowController::class, 'follow'])->name('api.users.follow');
+    Route::delete('/users/{user}/unfollow', [FollowController::class, 'unfollow'])->name('api.users.unfollow');
+    Route::get('/follow/stats', [FollowController::class, 'stats'])->name('api.follow.stats');
+
+    // Like system routes
+    Route::post('/posts/{post}/like', [LikeController::class, 'like'])->name('api.posts.like');
+    Route::delete('/posts/{post}/unlike', [LikeController::class, 'unlike'])->name('api.posts.unlike');
+    Route::post('/posts/{post}/toggle-like', [LikeController::class, 'toggle'])->name('api.posts.toggleLike');
+
+    // Comment system routes
+    Route::post('/posts/{post}/comments', [CommentController::class, 'store'])->name('api.posts.comments.store');
+    Route::put('/comments/{comment}', [CommentController::class, 'update'])->name('api.comments.update');
+    Route::delete('/comments/{comment}', [CommentController::class, 'destroy'])->name('api.comments.destroy');
+
+    // Feed system routes
+    Route::get('/feed', [FeedController::class, 'personalFeed'])->name('api.feed.personal');
+    Route::get('/feed/stats', [FeedController::class, 'feedStats'])->name('api.feed.stats');
+    Route::post('/feed/refresh', [FeedController::class, 'refreshFeed'])->name('api.feed.refresh');
 
     // Rate limiting applied
     Route::middleware('throttle:60,1')->group(function () {

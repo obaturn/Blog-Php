@@ -6,6 +6,7 @@ use App\Http\Requests\StorePostRequest;
 use App\Http\Requests\UpdatePostRequest;
 use App\Jobs\ProcessPostImageJob;
 use App\Models\Post;
+use App\Services\FeedService;
 use App\Services\MediaUploadService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -28,13 +29,23 @@ class PostController extends Controller
             $perPage = min($perPage, 50); // Max 50 per page
 
             $posts = Post::with('user:id,name,email')
+                ->withCount(['likes', 'comments'])
                 ->orderBy('created_at', 'desc')
                 ->paginate($perPage);
+
+            // Add is_liked flag if authenticated
+            $postsData = $posts->map(function ($post) use ($request) {
+                $data = $post->toArray();
+                if ($request->user()) {
+                    $data['is_liked'] = $post->isLikedBy($request->user()->id);
+                }
+                return $data;
+            });
 
             return response()->json([
                 'success' => true,
                 'data' => [
-                    'posts' => $posts->items(),
+                    'posts' => $postsData,
                     'pagination' => [
                         'current_page' => $posts->currentPage(),
                         'per_page' => $posts->perPage(),
@@ -77,6 +88,17 @@ class PostController extends Controller
 
             // Load user relationship
             $post->load('user:id,name,email');
+
+            // Invalidate follower feeds (so they see new post)
+            try {
+                $feedService = app(FeedService::class);
+                $feedService->invalidateFollowerFeeds($request->user()->id);
+            } catch (\Exception $e) {
+                Log::warning('Failed to invalidate follower feeds after post creation', [
+                    'post_id' => $post->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
 
             return response()->json([
                 'success' => true,
@@ -126,18 +148,27 @@ class PostController extends Controller
     /**
      * Display the specified post.
      *
+     * @param Request $request
      * @param Post $post
      * @return JsonResponse
      */
-    public function show(Post $post): JsonResponse
+    public function show(Request $request, Post $post): JsonResponse
     {
         try {
             $post->load('user:id,name,email');
+            $post->loadCount(['likes', 'comments']);
+
+            $postData = $post->toArray();
+
+            // Add is_liked flag if authenticated
+            if ($request->user()) {
+                $postData['is_liked'] = $post->isLikedBy($request->user()->id);
+            }
 
             return response()->json([
                 'success' => true,
                 'data' => [
-                    'post' => $post,
+                    'post' => $postData,
                 ],
             ], 200);
         } catch (\Exception $e) {
