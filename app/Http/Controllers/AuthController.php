@@ -9,19 +9,46 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
+/**
+ * AuthController - Handles user authentication with Sanctum
+ *
+ * Features:
+ * - User registration with automatic login
+ * - Secure login with credential validation
+ * - Token management (create, revoke, refresh)
+ * - Rate limiting for brute force protection
+ * - Detailed logging for security monitoring
+ */
 class AuthController extends Controller
 {
     /**
+     * Maximum login attempts before lockout.
+     */
+    protected const MAX_ATTEMPTS = 5;
+
+    /**
+     * Lockout duration in minutes.
+     */
+    protected const LOCKOUT_MINUTES = 15;
+
+    /**
      * Register a new user.
-     *
-     * @param RegisterRequest $request
-     * @return JsonResponse
      */
     public function register(RegisterRequest $request): JsonResponse
     {
         try {
+            // Check if email already exists
+            if (User::where('email', $request->email)->exists()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Registration failed',
+                    'error' => 'Email address is already registered.',
+                ], 422);
+            }
+
             $user = User::create([
                 'name' => $request->name,
                 'email' => $request->email,
@@ -31,21 +58,28 @@ class AuthController extends Controller
             // Create token for immediate login after registration
             $token = $user->createToken('auth_token')->plainTextToken;
 
+            Log::info('New user registered', [
+                'user_id' => $user->id,
+                'email' => $user->email,
+                'ip' => $request->ip(),
+            ]);
+
             return response()->json([
                 'success' => true,
                 'message' => 'User registered successfully',
                 'data' => [
-                    'user' => [
-                        'id' => $user->id,
-                        'name' => $user->name,
-                        'email' => $user->email,
-                        'created_at' => $user->created_at,
-                    ],
+                    'user' => $this->formatUser($user),
                     'token' => $token,
                     'token_type' => 'Bearer',
+                    'token_expires_at' => null, // Sanctum tokens don't expire by default
                 ],
             ], 201);
         } catch (\Exception $e) {
+            Log::error('Registration failed', [
+                'error' => $e->getMessage(),
+                'email' => $request->email,
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Registration failed',
@@ -56,36 +90,73 @@ class AuthController extends Controller
 
     /**
      * Login user and create token.
-     *
-     * @param LoginRequest $request
-     * @return JsonResponse
      */
     public function login(LoginRequest $request): JsonResponse
     {
         try {
+            // Check for brute force attempts
+            if ($this->hasTooManyLoginAttempts($request)) {
+                $this->fireLockoutEvent($request);
+
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Too many login attempts',
+                    'error' => 'Please wait ' . self::LOCKOUT_MINUTES . ' minutes before trying again.',
+                    'retry_after' => self::LOCKOUT_MINUTES * 60,
+                ], 429);
+            }
+
             $user = User::where('email', $request->email)->first();
 
-            if (!$user || !Hash::check($request->password, $user->password)) {
+            if (!$user) {
+                $this->incrementLoginAttempts($request);
                 throw ValidationException::withMessages([
                     'email' => ['The provided credentials are incorrect.'],
                 ]);
             }
 
-            // Revoke all previous tokens (optional - for single session)
-            // $user->tokens()->delete();
+            // Verify password
+            if (!Hash::check($request->password, $user->password)) {
+                $this->incrementLoginAttempts($request);
+
+                Log::warning('Failed login attempt - wrong password', [
+                    'user_id' => $user->id,
+                    'email' => $user->email,
+                    'ip' => $request->ip(),
+                ]);
+
+                throw ValidationException::withMessages([
+                    'email' => ['The provided credentials are incorrect.'],
+                ]);
+            }
+
+            // Check if user is active
+            if ($this->isUserInactive($user)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Login failed',
+                    'error' => 'Your account has been deactivated. Please contact support.',
+                ], 403);
+            }
+
+            // Clear login attempts on successful login
+            $this->clearLoginAttempts($request);
 
             // Create new token
             $token = $user->createToken('auth_token')->plainTextToken;
+
+            Log::info('User logged in successfully', [
+                'user_id' => $user->id,
+                'email' => $user->email,
+                'ip' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+            ]);
 
             return response()->json([
                 'success' => true,
                 'message' => 'Login successful',
                 'data' => [
-                    'user' => [
-                        'id' => $user->id,
-                        'name' => $user->name,
-                        'email' => $user->email,
-                    ],
+                    'user' => $this->formatUser($user),
                     'token' => $token,
                     'token_type' => 'Bearer',
                 ],
@@ -97,6 +168,11 @@ class AuthController extends Controller
                 'errors' => $e->errors(),
             ], 401);
         } catch (\Exception $e) {
+            Log::error('Login error', [
+                'error' => $e->getMessage(),
+                'email' => $request->email,
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Login failed',
@@ -106,22 +182,34 @@ class AuthController extends Controller
     }
 
     /**
-     * Logout user (revoke token).
-     *
-     * @param Request $request
-     * @return JsonResponse
+     * Logout user (revoke current token).
      */
     public function logout(Request $request): JsonResponse
     {
         try {
+            // Get current token before deletion
+            $token = $request->user()->currentAccessToken();
+            $tokenId = $token?->id;
+
             // Revoke current token
             $request->user()->currentAccessToken()->delete();
+
+            Log::info('User logged out', [
+                'user_id' => $request->user()->id,
+                'token_id' => $tokenId,
+                'ip' => $request->ip(),
+            ]);
 
             return response()->json([
                 'success' => true,
                 'message' => 'Logout successful',
             ], 200);
         } catch (\Exception $e) {
+            Log::error('Logout error', [
+                'error' => $e->getMessage(),
+                'user_id' => $request->user()?->id,
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Logout failed',
@@ -131,41 +219,193 @@ class AuthController extends Controller
     }
 
     /**
+     * Logout from all devices (revoke all tokens).
+     */
+    public function logoutAll(Request $request): JsonResponse
+    {
+        try {
+            $user = $request->user();
+            $tokenCount = $user->tokens()->count();
+
+            // Revoke all tokens
+            $user->tokens()->delete();
+
+            Log::info('User logged out from all devices', [
+                'user_id' => $user->id,
+                'tokens_revoked' => $tokenCount,
+                'ip' => $request->ip(),
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Logged out from all devices successfully',
+                'data' => [
+                    'tokens_revoked' => $tokenCount,
+                ],
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Logout failed',
+                'error' => config('app.debug') ? $e->getMessage() : 'An error occurred',
+            ], 500);
+        }
+    }
+
+    /**
+     * Refresh token (revoke old, create new).
+     */
+    public function refreshToken(Request $request): JsonResponse
+    {
+        try {
+            $user = $request->user();
+
+            // Revoke current token
+            $request->user()->currentAccessToken()->delete();
+
+            // Create new token
+            $token = $user->createToken('auth_token')->plainTextToken;
+
+            Log::info('Token refreshed', [
+                'user_id' => $user->id,
+                'ip' => $request->ip(),
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Token refreshed successfully',
+                'data' => [
+                    'token' => $token,
+                    'token_type' => 'Bearer',
+                ],
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Token refresh failed',
+                'error' => config('app.debug') ? $e->getMessage() : 'An error occurred',
+            ], 500);
+        }
+    }
+
+    /**
      * Get authenticated user profile.
-     *
-     * @param Request $request
-     * @return JsonResponse
      */
     public function profile(Request $request): JsonResponse
     {
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'user' => [
-                    'id' => $request->user()->id,
-                    'name' => $request->user()->name,
-                    'email' => $request->user()->email,
-                    'created_at' => $request->user()->created_at,
-                    'updated_at' => $request->user()->updated_at,
+        try {
+            $user = $request->user();
+
+            // Get token info
+            $token = $request->user()->currentAccessToken();
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'user' => $this->formatUser($user),
+                    'token_info' => [
+                        'id' => $token?->id,
+                        'created_at' => $token?->created_at,
+                        'expires_at' => $token?->expires_at,
+                    ],
                 ],
-            ],
-        ], 200);
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch profile',
+                'error' => config('app.debug') ? $e->getMessage() : 'An error occurred',
+            ], 500);
+        }
+    }
+
+    /**
+     * Get all active tokens for the authenticated user.
+     */
+    public function tokens(Request $request): JsonResponse
+    {
+        try {
+            $tokens = $request->user()->tokens()->get()->map(function ($token) {
+                return [
+                    'id' => $token->id,
+                    'name' => $token->name,
+                    'created_at' => $token->created_at,
+                    'expires_at' => $token->expires_at,
+                    'last_used_at' => $token->last_used_at,
+                ];
+            });
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'tokens' => $tokens,
+                    'count' => $tokens->count(),
+                ],
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch tokens',
+                'error' => config('app.debug') ? $e->getMessage() : 'An error occurred',
+            ], 500);
+        }
+    }
+
+    /**
+     * Revoke a specific token.
+     */
+    public function revokeToken(Request $request, $tokenId): JsonResponse
+    {
+        try {
+            $token = $request->user()->tokens()->where('id', $tokenId)->first();
+
+            if (!$token) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Token not found',
+                ], 404);
+            }
+
+            $token->delete();
+
+            Log::info('Token revoked', [
+                'user_id' => $request->user()->id,
+                'token_id' => $tokenId,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Token revoked successfully',
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to revoke token',
+                'error' => config('app.debug') ? $e->getMessage() : 'An error occurred',
+            ], 500);
+        }
     }
 
     /**
      * Revoke all tokens for the authenticated user.
-     *
-     * @param Request $request
-     * @return JsonResponse
      */
     public function revokeAll(Request $request): JsonResponse
     {
         try {
+            $count = $request->user()->tokens()->count();
             $request->user()->tokens()->delete();
+
+            Log::info('All tokens revoked', [
+                'user_id' => $request->user()->id,
+                'tokens_revoked' => $count,
+            ]);
 
             return response()->json([
                 'success' => true,
                 'message' => 'All tokens revoked successfully',
+                'data' => [
+                    'tokens_revoked' => $count,
+                ],
             ], 200);
         } catch (\Exception $e) {
             return response()->json([
@@ -174,5 +414,79 @@ class AuthController extends Controller
                 'error' => config('app.debug') ? $e->getMessage() : 'An error occurred',
             ], 500);
         }
+    }
+
+    // ========== Helper Methods ==========
+
+    /**
+     * Format user data for response.
+     */
+    protected function formatUser(User $user): array
+    {
+        return [
+            'id' => $user->id,
+            'name' => $user->name,
+            'email' => $user->email,
+            'created_at' => $user->created_at,
+        ];
+    }
+
+    /**
+     * Check if user is inactive.
+     */
+    protected function isUserInactive(User $user): bool
+    {
+        // Add your inactive check logic here if needed
+        // e.g., check for 'active' column
+        return false;
+    }
+
+    /**
+     * Get the rate limiter key for the given request.
+     */
+    protected function throttleKey(Request $request): string
+    {
+        return 'login_attempts_' . strtolower($request->input('email'));
+    }
+
+    /**
+     * Determine if the user has too many login attempts.
+     */
+    protected function hasTooManyLoginAttempts(Request $request): bool
+    {
+        $key = $this->throttleKey($request);
+        $attempts = cache($key, 0);
+
+        return $attempts >= self::MAX_ATTEMPTS;
+    }
+
+    /**
+     * Increment the login attempts for the user.
+     */
+    protected function incrementLoginAttempts(Request $request): void
+    {
+        $key = $this->throttleKey($request);
+        $attempts = cache($key, 0) + 1;
+
+        cache([$key => $attempts], self::LOCKOUT_MINUTES * 60);
+    }
+
+    /**
+     * Clear the login attempts for the user.
+     */
+    protected function clearLoginAttempts(Request $request): void
+    {
+        cache()->forget($this->throttleKey($request));
+    }
+
+    /**
+     * Fire the lockout event.
+     */
+    protected function fireLockoutEvent(Request $request): void
+    {
+        Log::warning('Too many login attempts - lockout', [
+            'email' => $request->input('email'),
+            'ip' => $request->ip(),
+        ]);
     }
 }

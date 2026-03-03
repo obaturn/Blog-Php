@@ -19,6 +19,17 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Cache TTL (Time to Live)
+    |--------------------------------------------------------------------------
+    |
+    | Default TTL in seconds for cached items. Can be overridden per-item.
+    |
+    */
+
+    'ttl' => (int) env('CACHE_TTL', 300), // 5 minutes
+
+    /*
+    |--------------------------------------------------------------------------
     | Cache Stores
     |--------------------------------------------------------------------------
     |
@@ -44,6 +55,7 @@ return [
             'table' => env('DB_CACHE_TABLE', 'cache'),
             'lock_connection' => env('DB_CACHE_LOCK_CONNECTION'),
             'lock_table' => env('DB_CACHE_LOCK_TABLE'),
+            'lock_lifetime' => (int) env('DB_CACHE_LOCK_LIFETIME', 300),
         ],
 
         'file' => [
@@ -103,6 +115,21 @@ return [
     |
     */
 
-    'prefix' => env('CACHE_PREFIX', Str::slug(env('APP_NAME', 'laravel'), '_').'_cache_'),
+    'prefix' => env('CACHE_PREFIX', Str::slug(env('APP_NAME', 'laravel'), '_') . '_cache_'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Fallback Cache Settings
+    |--------------------------------------------------------------------------
+    |
+    | Configure fallback behavior when the primary cache store fails.
+    |
+    */
+
+    'fallback' => [
+        'enabled' => env('CACHE_FALLBACK_ENABLED', true),
+        'driver' => 'file', // Fallback to file-based cache
+    ],
 
 ];
+
