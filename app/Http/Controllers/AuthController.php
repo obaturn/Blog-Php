@@ -320,6 +320,77 @@ class AuthController extends Controller
     }
 
     /**
+     * Update authenticated user profile.
+     */
+    public function updateProfile(Request $request): JsonResponse
+    {
+        try {
+            $validated = $request->validate([
+                'name' => 'sometimes|string|min:2|max:100',
+                'email' => 'sometimes|email|unique:users,email,' . $request->user()->id,
+                'bio' => 'sometimes|string|max:500|nullable',
+                'avatar' => 'sometimes|image|max:2048|nullable',
+            ]);
+
+            $user = $request->user();
+
+            // Update name if provided
+            if (isset($validated['name'])) {
+                $user->name = $validated['name'];
+            }
+
+            // Update email if provided
+            if (isset($validated['email'])) {
+                $user->email = $validated['email'];
+            }
+
+            // Update bio if provided
+            if (array_key_exists('bio', $validated)) {
+                $user->bio = $validated['bio'];
+            }
+
+            // Handle avatar upload
+            if ($request->hasFile('avatar')) {
+                $avatar = $validated['avatar'];
+                $path = $avatar->store('avatars', 'public');
+                $user->avatar = $path;
+            }
+
+            $user->save();
+
+            Log::info('Profile updated', [
+                'user_id' => $user->id,
+                'updated_fields' => array_keys($validated),
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Profile updated successfully',
+                'data' => [
+                    'user' => $this->formatUser($user),
+                ],
+            ], 200);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $e->errors(),
+            ], 422);
+        } catch (\Exception $e) {
+            Log::error('Profile update failed', [
+                'error' => $e->getMessage(),
+                'user_id' => $request->user()?->id,
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update profile',
+                'error' => config('app.debug') ? $e->getMessage() : 'An error occurred',
+            ], 500);
+        }
+    }
+
+    /**
      * Get all active tokens for the authenticated user.
      */
     public function tokens(Request $request): JsonResponse

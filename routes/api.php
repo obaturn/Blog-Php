@@ -71,9 +71,10 @@ Route::prefix('v1')->group(function () {
 // Protected routes (requires authentication)
 Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
     // Authentication management
-    Route::post('/logout', [AuthController::class, 'logout'])->name('api.logout');
-    Route::post('/logout-all', [AuthController::class, 'logoutAll'])->name('api.logout.all');
-    Route::get('/profile', [AuthController::class, 'profile'])->name('api.profile');
+Route::post('/logout', [AuthController::class, 'logout'])->name('api.logout');
+        Route::post('/logout-all', [AuthController::class, 'logoutAll'])->name('api.logout.all');
+        Route::get('/profile', [AuthController::class, 'profile'])->name('api.profile');
+        Route::post('/profile', [AuthController::class, 'updateProfile'])->name('api.profile.update');
     Route::get('/tokens', [AuthController::class, 'tokens'])->name('api.tokens');
     Route::post('/refresh-token', [AuthController::class, 'refreshToken'])->name('api.token.refresh');
     Route::delete('/tokens/{tokenId}', [AuthController::class, 'revokeToken'])->name('api.tokens.revoke');
