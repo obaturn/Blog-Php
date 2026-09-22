@@ -26,6 +26,7 @@ class StorePostRequest extends FormRequest
             'title' => ['required', 'string', 'max:255'],
             'content' => ['required', 'string', 'max:10000'],
             'image' => ['nullable', 'image', 'mimes:jpeg,png,jpg,gif', 'max:5120'], // 5MB max
+            'group_id' => ['nullable', 'integer', 'exists:groups,id'],
         ];
     }
 

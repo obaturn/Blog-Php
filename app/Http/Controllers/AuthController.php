@@ -11,6 +11,8 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Auth\Events\Verified;
+use Illuminate\Support\Facades\Password;
 
 /**
  * AuthController - Handles user authentication with Sanctum
@@ -54,6 +56,8 @@ class AuthController extends Controller
                 'email' => $request->email,
                 'password' => Hash::make($request->password),
             ]);
+
+            $user->sendEmailVerificationNotification();
 
             // Create token for immediate login after registration
             $token = $user->createToken('auth_token')->plainTextToken;
@@ -319,6 +323,81 @@ class AuthController extends Controller
         }
     }
 
+    public function resendVerification(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        if (!$user->hasVerifiedEmail()) {
+            $user->sendEmailVerificationNotification();
+        }
+
+        return response()->json(['success' => true, 'message' => 'If verification is needed, an email has been sent.']);
+    }
+
+    public function verifyEmail(Request $request, int $id, string $hash): JsonResponse
+    {
+        abort_unless($request->hasValidSignature(), 403, 'Verification link is invalid or expired.');
+        $user = User::findOrFail($id);
+        abort_unless(hash_equals($hash, sha1($user->getEmailForVerification())), 403, 'Verification link is invalid.');
+
+        if (!$user->hasVerifiedEmail() && $user->markEmailAsVerified()) {
+            event(new Verified($user));
+        }
+
+        return response()->json(['success' => true, 'message' => 'Email address verified successfully.']);
+    }
+
+    public function forgotPassword(Request $request): JsonResponse
+    {
+        $request->validate(['email' => ['required', 'email']]);
+        Password::sendResetLink(['email' => $request->input('email')]);
+
+        return response()->json(['success' => true, 'message' => 'If that email exists, a password reset link has been sent.']);
+    }
+
+    public function resetPassword(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'token' => ['required', 'string'],
+            'email' => ['required', 'email'],
+            'password' => ['required', 'confirmed', 'min:8'],
+        ]);
+
+        $status = Password::reset($data, function (User $user, string $password) {
+            $user->forceFill(['password' => Hash::make($password)])->save();
+            $user->tokens()->delete();
+        });
+
+        if ($status !== Password::PASSWORD_RESET) {
+            return response()->json(['success' => false, 'message' => __($status)], 422);
+        }
+
+        return response()->json(['success' => true, 'message' => 'Password reset successfully.']);
+    }
+
+    public function changePassword(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'current_password' => ['required', 'current_password:sanctum'],
+            'password' => ['required', 'confirmed', 'min:8'],
+        ]);
+
+        $request->user()->update(['password' => Hash::make($data['password'])]);
+        $currentTokenId = $request->user()->currentAccessToken()?->id;
+        $request->user()->tokens()->when($currentTokenId, fn ($query) => $query->where('id', '!=', $currentTokenId))->delete();
+
+        return response()->json(['success' => true, 'message' => 'Password changed successfully.']);
+    }
+
+    public function deleteAccount(Request $request): JsonResponse
+    {
+        $request->validate(['password' => ['required', 'current_password:sanctum']]);
+        $user = $request->user();
+        $user->tokens()->delete();
+        $user->delete();
+
+        return response()->json(['success' => true, 'message' => 'Account deleted successfully.']);
+    }
+
     /**
      * Update authenticated user profile.
      */
@@ -499,6 +578,7 @@ class AuthController extends Controller
             'name' => $user->name,
             'email' => $user->email,
             'created_at' => $user->created_at,
+            'email_verified_at' => $user->email_verified_at,
         ];
     }
 
@@ -507,9 +587,7 @@ class AuthController extends Controller
      */
     protected function isUserInactive(User $user): bool
     {
-        // Add your inactive check logic here if needed
-        // e.g., check for 'active' column
-        return false;
+        return $user->suspended_at !== null;
     }
 
     /**

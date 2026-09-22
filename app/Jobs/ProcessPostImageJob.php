@@ -71,7 +71,7 @@ class ProcessPostImageJob implements ShouldQueue, ShouldBeUnique
         $this->tempFilePath = $tempFilePath;
         $this->userId = $post->user_id;
         $this->onQueue('media');
-        $this->setConnection('database');
+        $this->onConnection('database');
     }
 
     /**

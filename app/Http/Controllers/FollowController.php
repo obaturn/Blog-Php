@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Notifications\SocialActivityNotification;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -19,6 +20,10 @@ class FollowController extends Controller
     public function follow(Request $request, User $user): JsonResponse
     {
         try {
+            if ($request->user()->isBlocking($user) || $request->user()->isBlockedBy($user)) {
+                return response()->json(['success' => false, 'message' => 'You cannot follow this user.'], 403);
+            }
+
             // Check if trying to follow self
             if ($request->user()->id === $user->id) {
                 return response()->json([
@@ -36,6 +41,12 @@ class FollowController extends Controller
             }
 
             $request->user()->follow($user);
+
+            $user->notify(new SocialActivityNotification(
+                'new_follower',
+                "{$request->user()->name} started following you.",
+                ['user_id' => $request->user()->id]
+            ));
 
             return response()->json([
                 'success' => true,

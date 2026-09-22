@@ -17,6 +17,7 @@ class Post extends Model
      */
     protected $fillable = [
         'user_id',
+        'group_id',
         'title',
         'content',
         'image_url',
@@ -38,6 +39,11 @@ class Post extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function group(): BelongsTo
+    {
+        return $this->belongsTo(Group::class);
     }
 
     /**

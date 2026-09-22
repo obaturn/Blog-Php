@@ -6,6 +6,7 @@ use App\Http\Requests\StorePostRequest;
 use App\Http\Requests\UpdatePostRequest;
 use App\Jobs\ProcessPostImageJob;
 use App\Models\Post;
+use App\Models\Group;
 use App\Services\FeedService;
 use App\Services\MediaUploadService;
 use Illuminate\Http\JsonResponse;
@@ -73,9 +74,21 @@ class PostController extends Controller
     public function store(StorePostRequest $request): JsonResponse
     {
         try {
+            $group = $request->filled('group_id')
+                ? Group::findOrFail($request->integer('group_id'))
+                : null;
+
+            if ($group && !$request->user()->groups()->whereKey($group->id)->exists()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'You must join this group before publishing there.',
+                ], 403);
+            }
+
             // Create post without image first
             $post = Post::create([
                 'user_id' => $request->user()->id,
+                'group_id' => $group?->id,
                 'title' => $request->title,
                 'content' => $request->content,
                 'image_url' => null,
@@ -87,7 +100,7 @@ class PostController extends Controller
             }
 
             // Load user relationship
-            $post->load('user:id,name,email');
+            $post->load(['user:id,name,email', 'group:id,name,slug']);
 
             // Invalidate follower feeds (so they see new post)
             try {

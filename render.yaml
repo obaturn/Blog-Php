@@ -1,0 +1,50 @@
+services:
+  api:
+    type: web
+    name: socialblog-api
+    runtime: docker
+    region: oregon
+    plan: free
+    envVars:
+      - key: APP_NAME
+        value: SocialBlog
+      - key: APP_ENV
+        value: production
+      - key: APP_DEBUG
+        value: "false"
+      - key: APP_URL
+        value: https://socialblog-api.onrender.com
+      - key: DB_CONNECTION
+        value: pgsql
+      - key: DB_HOST
+        fromGroup: database
+      - key: DB_PORT
+        fromGroup: database
+      - key: DB_DATABASE
+        fromGroup: database
+      - key: DB_USERNAME
+        fromGroup: database
+      - key: DB_PASSWORD
+        fromGroup: database
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://socialblog.vercel.app,https://socialblog.onrender.com,https://socialblog-api.onrender.com
+      - key: SANCTUM_STATEFUL_DOMAINS
+        value: socialblog.vercel.app
+      - key: SANCTUM_TOKEN_EXPIRATION
+        value: "10080"
+      - key: LOG_LEVEL
+        value: error
+      - key: SESSION_ENCRYPT
+        value: "true"
+      - key: MAIL_MAILER
+        value: log
+      - key: MEDIA_DRIVER
+        value: local
+      - key: FEED_CACHE_ENABLED
+        value: "false"
+    healthCheckPath: /api/health
+
+database:
+  type: db-postgres
+  plan: free
+  ipAllowList: []

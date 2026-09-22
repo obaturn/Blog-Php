@@ -6,6 +6,7 @@ use App\Events\PostLiked;
 use App\Events\PostUnliked;
 use App\Models\Like;
 use App\Models\Post;
+use App\Notifications\SocialActivityNotification;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -73,6 +74,14 @@ class LikeController extends Controller
             // Dispatch event for notifications (async)
             if ($wasCreated) {
                 event(new PostLiked($post, $request->user()));
+
+                if ($post->user_id !== $userId) {
+                    $post->user->notify(new SocialActivityNotification(
+                        'post_liked',
+                        "{$request->user()->name} liked your post.",
+                        ['post_id' => $post->id, 'user_id' => $userId]
+                    ));
+                }
 
                 Log::info('Post liked', [
                     'user_id' => $userId,

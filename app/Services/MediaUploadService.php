@@ -58,30 +58,12 @@ class MediaUploadService
             ]);
             $this->isConfigured = true;
 
-            // Verify connection by making a simple API call
-            $this->verifyConnection();
         } catch (\Exception $e) {
             Log::error('Failed to initialize Cloudinary', [
                 'error' => $e->getMessage(),
                 'cloud_name' => $cloudName,
             ]);
             $this->isConfigured = false;
-        }
-    }
-
-    /**
-     * Verify Cloudinary connection is working.
-     */
-    protected function verifyConnection(): void
-    {
-        try {
-            if ($this->cloudinary) {
-                // Just check if we can access the cloud info
-                $this->cloudinary->uploadApi()->ping();
-                Log::info('Cloudinary connection verified successfully');
-            }
-        } catch (\Exception $e) {
-            Log::warning('Cloudinary ping failed', ['error' => $e->getMessage()]);
         }
     }
 

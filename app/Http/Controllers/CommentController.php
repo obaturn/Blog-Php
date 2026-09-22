@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Comment;
 use App\Models\Post;
+use App\Notifications\SocialActivityNotification;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -107,6 +108,14 @@ class CommentController extends Controller
             ]);
 
             $comment->load('user:id,name,email');
+
+            if ($post->user_id !== $request->user()->id) {
+                $post->user->notify(new SocialActivityNotification(
+                    'post_commented',
+                    "{$request->user()->name} commented on your post.",
+                    ['post_id' => $post->id, 'comment_id' => $comment->id]
+                ));
+            }
 
             Log::info('Comment created', [
                 'comment_id' => $comment->id,
