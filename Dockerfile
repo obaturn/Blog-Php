@@ -40,7 +40,11 @@ RUN rm -rf public/favicon.ico public/robots.txt \
 WORKDIR /var/www/html
 RUN composer dump-autoload
 
-RUN if [ ! -f .env ] || [ "x$(grep -c '^APP_KEY=base64:' .env)" = "x0" ]; then cp .env.example .env && php artisan key:generate --force; fi
+RUN if [ -z "$DATABASE_URL" ]; then
+    if [ ! -f .env ] || [ "x$(grep -c '^APP_KEY=base64:' .env)" = "x0" ]; then
+        cp .env.example .env && php artisan key:generate --force
+    fi
+fi
 
 RUN mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache \
     && chmod -R 777 storage bootstrap/cache
