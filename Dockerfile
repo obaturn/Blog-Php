@@ -2,13 +2,12 @@ FROM php:8.3-apache
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies
+# Install system dependencies and PHP extensions
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl zip unzip pkg-config \
-    libpng-dev libonig-dev libxml2-dev libzip-dev libpq-dev \
-    && docker-php-ext-configure gd --with-freetype --with-jpeg \
-    && docker-php-ext-install pdo_mysql pdo_pgsql mbstring exif pcntl bcmath gd \
-    && docker-php-ext-install zip \
+    libpng-dev libjpeg-dev libfreetype6-dev \
+    libonig-dev libxml2-dev libzip-dev libpq-dev \
+    && docker-php-ext-install pdo_mysql pdo_pgsql mbstring exif pcntl bcmath gd zip \
     && apt-get purge -y --auto-remove \
     && rm -rf /var/lib/apt/lists/*
 
