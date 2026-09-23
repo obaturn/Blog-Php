@@ -1,63 +1,52 @@
 FROM php:8.3-apache
 
+ENV DEBIAN_FRONTEND=noninteractive
+
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
-    git \
-    curl \
-    libpng-dev \
-    libonig-dev \
-    libxml2-dev \
-    zip \
-    unzip \
-    libpq-dev \
-    && docker-php-ext-install pdo_mysql pdo_pgsql mbstring exif pcntl bcmath gd zip pdo
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl zip unzip pkg-config \
+    libpng-dev libonig-dev libxml2-dev libzip-dev libpq-dev \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install pdo_mysql pdo_pgsql mbstring exif pcntl bcmath gd \
+    && docker-php-ext-install zip \
+    && apt-get purge -y --auto-remove \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 20
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Composer
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
-# Set working directory
 WORKDIR /var/www/html
 
-# Copy composer files first for better caching
 COPY composer.json composer.lock /var/www/html/
-
-# Install PHP dependencies
 RUN composer install --optimize-autoloader --no-dev --no-interaction --no-scripts --no-progress --ignore-platform-reqs
 
-# Copy Laravel application
 COPY . .
 
-# Install Node dependencies and build frontend
 WORKDIR /var/www/html/frontend
 RUN npm ci --no-audit --no-fund && npm run build
 
-# Copy built frontend to Laravel public directory
 WORKDIR /var/www/html
-RUN rm -rf public/* \
-    && cp -r frontend/dist/* public/ \
-    && cp frontend/dist/index.html public/404.html
+RUN rm -rf public/ && cp -r frontend/dist/* public/ && cp frontend/dist/index.html public/404.html
 
-# Install Laravel package assets
 WORKDIR /var/www/html
 RUN composer dump-autoload
 
-# Generate application key if not set
 RUN if [ ! -f .env ] || [ "x$(grep -c '^APP_KEY=base64:' .env)" = "x0" ]; then cp .env.example .env && php artisan key:generate --force; fi
 
-# Create storage directories
-RUN mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache && chmod -R 777 storage bootstrap/cache
+RUN mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache \
+    && chmod -R 777 storage bootstrap/cache
 
-# Configure Apache
 COPY docker/apache.conf /etc/apache2/sites-available/000-default.conf
-
-# Enable Apache modules
 RUN a2enmod rewrite headers
 
 EXPOSE 80
 
-# Run migrations on startup
 CMD ["sh", "-c", "php artisan migrate --force && apache2-foreground"]
