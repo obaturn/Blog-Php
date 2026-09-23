@@ -33,7 +33,9 @@ WORKDIR /var/www/html/frontend
 RUN npm ci --no-audit --no-fund && npm run build
 
 WORKDIR /var/www/html
-RUN rm -rf public/ && cp -r frontend/dist/* public/ && cp frontend/dist/index.html public/404.html
+RUN rm -rf public/favicon.ico public/robots.txt \
+    && cp -r frontend/dist/* public/ \
+    && cp frontend/dist/index.html public/404.html
 
 WORKDIR /var/www/html
 RUN composer dump-autoload
